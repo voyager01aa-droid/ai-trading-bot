@@ -23,7 +23,7 @@ kotak_password = st.sidebar.text_input("Password", type="password")
 stock_symbol = st.sidebar.text_input("Stock Symbol (e.g., RELIANCE.NS)", "RELIANCE.NS")
 qty = st.sidebar.number_input("Trade Quantity", min_value=1, value=10)
 
-# --- FUNCTION: FETCH PRICE ACTION (UPDATED & FIXED) ---
+# --- FUNCTION: FETCH PRICE ACTION ---
 def get_price_action(symbol):
     try:
         ticker = yf.Ticker(symbol)
@@ -36,7 +36,6 @@ def get_price_action(symbol):
         latest = data.iloc[-1]
         prev = data.iloc[-2]
         
-        # Converted strictly to float to prevent Streamlit metric crash
         current_price = float(latest['Close'])
         prev_price = float(prev['Close'])
         
@@ -59,17 +58,34 @@ def get_market_news(api_key, query="Indian Stock Market NSE"):
     url = f"https://newsapi.org/v2/everything?q={query}&sortBy=publishedAt&language=en&apiKey={api_key}"
     try:
         res = requests.get(url).json()
-        articles = res.get("articles", [])[:5] # Top 5 latest news
+        articles = res.get("articles", [])[:5]
         news_summary = "\n".join([f"- {a['title']}" for a in articles])
         return news_summary if news_summary else "No major news found."
     except:
         return "Failed to fetch news."
 
-# --- FUNCTION: AI ANALYSIS (GEMINI 1.5 PRO) ---
+# --- FUNCTION: SMART AI ANALYSIS (AUTO-DETECT MODEL) ---
 def analyze_with_ai(price_data, news, symbol):
     genai.configure(api_key=gemini_api_key)
-    # 🚨 Model updated to gemini-1.5-pro as older versions are deprecated
-    model = genai.GenerativeModel('gemini-1.5-pro')
+    
+    # AI khud check karega ki aapki API key par kaunsa model allowed hai
+    available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+    
+    # Priority list (Jo mil jayega wo use kar lega)
+    target_model = None
+    for preferred in ['models/gemini-1.5-flash', 'models/gemini-1.5-pro', 'models/gemini-1.0-pro', 'models/gemini-pro']:
+        if preferred in available_models:
+            target_model = preferred
+            break
+            
+    if not target_model and available_models:
+        target_model = available_models[0] # Agar koi upar wala na mile toh jo pehla mile wo use karo
+        
+    if not target_model:
+        return "Error: Aapki API key par koi bhi Text Generation model available nahi hai."
+
+    # Final selected model ka use karega
+    model = genai.GenerativeModel(target_model)
     
     prompt = f"""
     You are an expert NSE Intraday Stock Market Analyst. Analyze the following deeply:
@@ -143,6 +159,6 @@ if st.button("🚀 Analyze Market & Generate Call"):
                             else:
                                 st.error("Please enter Kotak Neo credentials in the sidebar to auto-trade.")
                 except Exception as e:
-                    st.error(f"AI Analysis Failed: Check Gemini API Key or try again. Error: {e}")
+                    st.error(f"AI Analysis Failed: {e}")
         else:
             st.error("Could not fetch price data. Check stock symbol (use .NS for NSE) or check internet connection.")
