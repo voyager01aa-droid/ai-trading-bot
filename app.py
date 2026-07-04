@@ -4,10 +4,12 @@ import pandas as pd
 import requests
 import google.generativeai as genai
 import concurrent.futures
+import numpy as np
 
 # --- PAGE SETUP ---
-st.set_page_config(page_title="AI Pro Trading Dashboard", layout="wide", page_icon="📈")
-st.title("📈 Pro AI Trading Dashboard (Screener + Search)")
+st.set_page_config(page_title="Institutional AI Trader", layout="wide", page_icon="🏦")
+st.title("🏦 Institutional Grade AI Trading Bot")
+st.caption("Powered by Smart Money Concepts, VWAP, EMA, RSI & Market Sentiment")
 
 # --- SIDEBAR: CREDENTIALS ---
 st.sidebar.header("🔑 API Credentials")
@@ -19,7 +21,7 @@ kotak_consumer_key = st.sidebar.text_input("Consumer Key", type="password")
 kotak_password = st.sidebar.text_input("Password", type="password")
 qty = st.sidebar.number_input("Default Trade Qty", min_value=1, value=10)
 
-# 📌 NIFTY 500 LIQUID UNIVERSE (Top ~100-150 for safety & speed)
+# 📌 NIFTY 500 LIQUID UNIVERSE
 NIFTY_500_STOCKS = [
     "RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "ICICIBANK.NS", "INFY.NS", "SBIN.NS", 
     "BHARTIARTL.NS", "ITC.NS", "L&T.NS", "BAJFINANCE.NS", "AXISBANK.NS", "KOTAKBANK.NS",
@@ -30,23 +32,16 @@ NIFTY_500_STOCKS = [
     "ZOMATO.NS", "JIOFIN.NS", "IRFC.NS", "RVNL.NS", "IREDA.NS", "SUZLON.NS", "NHPC.NS",
     "PNB.NS", "BOB.NS", "TVSMOTOR.NS", "HEROMOTOCO.NS", "EICHERMOT.NS", "DLF.NS", 
     "LODHA.NS", "GODREJPROP.NS", "TRENT.NS", "CHOLAFIN.NS", "PFC.NS", "RECLTD.NS",
-    "GAIL.NS", "BHEL.NS", "BEL.NS", "HAL.NS", "MAZDOCK.NS", "COCHINSHIP.NS", "DIXON.NS",
-    "POLYCAB.NS", "HAVELLS.NS", "INDIGO.NS", "PIDILITIND.NS", "SRF.NS", "TATACHEM.NS",
-    "TATAPOWER.NS", "JSWSTEEL.NS", "JINDALSTEL.NS", "SAIL.NS", "VEDL.NS", "NMDC.NS",
-    "CIPLA.NS", "DRREDDY.NS", "DIVISLAB.NS", "LUPIN.NS", "AUROPHARMA.NS", "INDUSINDBK.NS",
-    "IDFCFIRSTB.NS", "YESBANK.NS", "BANDHANBNK.NS", "MUTHOOTFIN.NS", "MANAPPURAM.NS"
-    # Aap baaki ke Nifty 500 stocks yahan list me add kar sakte hain
+    "GAIL.NS", "BHEL.NS", "BEL.NS", "HAL.NS", "MAZDOCK.NS", "COCHINSHIP.NS", "DIXON.NS"
 ]
 
 # --- CORE FUNCTIONS ---
-
 def get_news(api_key, query):
     url = f"https://newsapi.org/v2/everything?q={query}&sortBy=publishedAt&language=en&apiKey={api_key}"
     try:
         res = requests.get(url).json()
         articles = res.get("articles", [])[:4] 
-        news_summary = "\n".join([f"- {a['title']}" for a in articles])
-        return news_summary if news_summary else "No major news found."
+        return "\n".join([f"- {a['title']}" for a in articles]) or "No major news found."
     except:
         return "Failed to fetch news."
 
@@ -56,14 +51,46 @@ def get_smart_ai_model():
     target = next((m for m in ['models/gemini-1.5-flash', 'models/gemini-1.5-pro', 'models/gemini-1.0-pro'] if m in available), available[0] if available else None)
     return genai.GenerativeModel(target) if target else None
 
+# --- INDICATORS CALCULATOR (PRO STRATEGY) ---
+def add_pro_indicators(df):
+    try:
+        # EMA 9 & 21
+        df['EMA_9'] = df['Close'].ewm(span=9, adjust=False).mean()
+        df['EMA_21'] = df['Close'].ewm(span=21, adjust=False).mean()
+        
+        # RSI 14
+        delta = df['Close'].diff()
+        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+        rs = gain / loss
+        df['RSI'] = 100 - (100 / (1 + rs))
+        
+        # VWAP
+        df['VWAP'] = (df['Volume'] * (df['High'] + df['Low'] + df['Close']) / 3).cumsum() / df['Volume'].cumsum()
+        return df
+    except:
+        return df
+
 # --- TAB 1 FUNCTIONS (SCREENER) ---
 def fetch_momentum(symbol):
     try:
-        data = yf.Ticker(symbol).history(period="2d")
-        if len(data) < 2: return None
-        prev, curr, vol = float(data['Close'].iloc[-2]), float(data['Close'].iloc[-1]), float(data['Volume'].iloc[-1])
-        pct_change = ((curr - prev) / prev) * 100
-        return {"Symbol": symbol, "Price": curr, "Change_Pct": pct_change, "Momentum": abs(pct_change), "Volume": vol}
+        data = yf.Ticker(symbol).history(period="5d", interval="15m")
+        if len(data) < 14: return None
+        
+        data = add_pro_indicators(data)
+        latest = data.iloc[-1]
+        prev = data.iloc[-2]
+        
+        pct_change = ((latest['Close'] - prev['Close']) / prev['Close']) * 100
+        
+        return {
+            "Symbol": symbol, 
+            "Price": latest['Close'], 
+            "VWAP": latest['VWAP'],
+            "RSI": latest['RSI'],
+            "Change_Pct": pct_change, 
+            "Momentum": abs(pct_change)
+        }
     except:
         return None
 
@@ -82,118 +109,125 @@ def get_detailed_price_action(symbol):
     try:
         data = yf.Ticker(symbol).history(period="5d", interval="15m")
         if data.empty: return None
-        curr, prev = float(data['Close'].iloc[-1]), float(data['Close'].iloc[-2])
-        trend = "Bullish 🟢" if curr > prev else "Bearish 🔴"
+        
+        data = add_pro_indicators(data)
+        latest = data.iloc[-1]
+        
+        trend = "Bullish 🟢" if latest['Close'] > latest['VWAP'] else "Bearish 🔴"
+        
         return {
-            "current_price": curr, "high": float(data['High'].iloc[-1]), "low": float(data['Low'].iloc[-1]),
-            "trend": trend, "data_summary": data.tail(4).to_string()
+            "current_price": latest['Close'], 
+            "vwap": latest['VWAP'],
+            "ema_9": latest['EMA_9'],
+            "ema_21": latest['EMA_21'],
+            "rsi": latest['RSI'],
+            "trend": trend, 
+            "data_summary": data[['Close', 'VWAP', 'RSI']].tail(3).to_string()
         }
     except:
         return None
 
 # --- AUTO TRADE ---
 def fire_trade(stock, action, price):
-    st.success(f"⚡ Order Sent: {action} {qty} qty of {stock} at Market (Trigger: ₹{price})")
+    st.success(f"⚡ Pro Order Sent: {action} {qty} qty of {stock} at Market (Trigger: ₹{price})")
 
 # --- UI TABS ---
-tab1, tab2 = st.tabs(["🚀 Top 10 Market Screener (Nifty 500)", "🔍 Search & Analyze Any Stock"])
+tab1, tab2 = st.tabs(["🚀 Top 10 Institutional Screener", "🔍 Deep Pro Analysis (Search)"])
 
 # ==========================================
-# TAB 1: NIFTY 500 TOP 10 SCREENER
+# TAB 1: TOP 10 SCREENER
 # ==========================================
 with tab1:
-    st.markdown("### 📊 Auto-Scan Top 10 Volatile Stocks")
-    if st.button("Screen Market & Get Calls"):
+    st.markdown("### 📊 Auto-Scan Top 10 High-Probability Setups")
+    if st.button("Screen Market & Get Pro Calls"):
         if not gemini_api_key or not news_api_key:
             st.warning("Please enter API keys in the sidebar.")
         else:
             with st.spinner("📰 Reading Macro Market News..."):
                 market_news = get_news(news_api_key, "Indian Stock Market OR NSE OR RBI")
-                
-            with st.spinner("⚡ Scanning Nifty 500 Universe for Top Movers..."):
+            with st.spinner("⚡ Scanning Nifty 500 & Calculating Pro Indicators (VWAP, RSI)..."):
                 top_10_df = get_top_10()
                 
             if top_10_df is not None:
                 st.info(f"**Today's Market Sentiment:**\n{market_news}")
-                st.dataframe(top_10_df.style.format({"Price": "₹{:.2f}", "Change_Pct": "{:.2f}%", "Momentum": "{:.2f}%"}))
+                st.dataframe(top_10_df.style.format({"Price": "₹{:.2f}", "VWAP": "₹{:.2f}", "RSI": "{:.1f}", "Change_Pct": "{:.2f}%", "Momentum": "{:.2f}%"}))
                 
-                with st.spinner("🤖 AI is Correlating News & Price Action for Top 10..."):
+                with st.spinner("🤖 AI is Correlating Institutional Logic..."):
                     model = get_smart_ai_model()
                     if model:
                         prompt = f"""
-                        You are a Pro NSE Trader. Combine this Top 10 momentum data with the Market News to give intraday calls.
+                        You are an Elite Institutional Trader using SMC (Smart Money Concepts). 
                         DATA: {top_10_df.to_string(index=False)}
                         NEWS: {market_news}
+                        
+                        Give intraday calls. If Price > VWAP and RSI < 70, it's a strong BUY setup.
+                        If Price < VWAP and RSI > 30, it's a strong SELL setup. Include news sentiment.
+                        
                         Format strictly as Markdown Table:
-                        | Stock | News Impact | Action (BUY/SELL/HOLD) | Entry | Target | SL | Logic |
+                        | Stock | Accuracy % | Action (BUY/SELL) | Entry | Target | SL (Min 1:2 RR) | Pro Logic |
                         """
                         res = model.generate_content(prompt)
-                        st.markdown("### 🎯 AI Strategy Board")
+                        st.markdown("### 🎯 Institutional AI Strategy Board")
                         st.markdown(res.text)
-            else:
-                st.error("Data fetch failed.")
 
 # ==========================================
 # TAB 2: SEARCH ANY STOCK
 # ==========================================
 with tab2:
-    st.markdown("### 🔍 Deep Analysis of Specific Stock")
-    search_symbol = st.text_input("Enter Stock Symbol (Add .NS for NSE, e.g., TATASTEEL.NS, IREDA.NS, ZOMATO.NS)")
+    st.markdown("### 🔍 Institutional Deep Dive (Specific Stock)")
+    search_symbol = st.text_input("Enter Stock Symbol (e.g., TATASTEEL.NS, IREDA.NS)")
     
-    if st.button("Deep Analyze Stock"):
+    if st.button("Generate Institutional Strategy"):
         if not gemini_api_key or not news_api_key:
-            st.warning("Please enter API keys in the sidebar.")
+            st.warning("Please enter API keys.")
         elif not search_symbol:
             st.warning("Please enter a stock symbol.")
         else:
             search_symbol = search_symbol.upper().strip()
-            if not search_symbol.endswith(".NS"):
-                search_symbol += ".NS" # Auto-correct if user forgets .NS
+            if not search_symbol.endswith(".NS"): search_symbol += ".NS"
                 
-            with st.spinner(f"📡 Fetching live 15m Price Action for {search_symbol}..."):
+            with st.spinner(f"📡 Calculating VWAP, EMAs, RSI for {search_symbol}..."):
                 price_data = get_detailed_price_action(search_symbol)
-                
             with st.spinner(f"📰 Fetching specific news for {search_symbol}..."):
-                clean_name = search_symbol.replace(".NS", "")
-                stock_news = get_news(news_api_key, f"{clean_name} OR NSE India")
+                stock_news = get_news(news_api_key, f"{search_symbol.replace('.NS', '')} OR NSE India")
                 
             if price_data:
-                # Show Price Metrics
-                st.subheader(f"📊 Live Data: {search_symbol}")
-                c1, c2, c3 = st.columns(3)
+                st.subheader(f"📊 Institutional Metrics: {search_symbol}")
+                c1, c2, c3, c4 = st.columns(4)
                 c1.metric("Current Price", f"₹{price_data['current_price']:.2f}")
-                c2.metric("Intraday Trend", price_data['trend'])
-                c3.metric("Latest News Found", "Yes ✅")
+                c2.metric("VWAP", f"₹{price_data['vwap']:.2f}")
+                c3.metric("RSI (Momentum)", f"{price_data['rsi']:.1f}")
+                c4.metric("Trend vs VWAP", price_data['trend'])
                 
-                st.markdown("**🗞️ Specific Stock News:**")
+                st.markdown("**🗞️ Catalyst News:**")
                 st.write(stock_news)
                 
-                # AI Analysis
-                with st.spinner("🤖 AI is calculating Entry, Exit, SL and Logic..."):
+                with st.spinner("🤖 AI Quant is calculating probability and Risk/Reward..."):
                     model = get_smart_ai_model()
                     if model:
                         prompt = f"""
-                        Analyze {search_symbol} for Intraday Trading.
-                        Price Data: Current = {price_data['current_price']}, Trend = {price_data['trend']}, Recent History = {price_data['data_summary']}
-                        Stock Specific News: {stock_news}
+                        Act as an Elite Hedge Fund Trader. Analyze {search_symbol}.
+                        Technicals: Price = {price_data['current_price']}, VWAP = {price_data['vwap']}, RSI = {price_data['rsi']}, EMA 9 = {price_data['ema_9']}, EMA 21 = {price_data['ema_21']}
+                        Recent History: {price_data['data_summary']}
+                        News Sentiment: {stock_news}
                         
-                        Give a strict intraday trading call. Combine technical trend and news sentiment.
+                        Calculate a probability 'Confidence Score' based on technical and news confluence (e.g., if price > VWAP + EMA 9 > 21 + Good News = 80%+ Accuracy). Ensure 1:2 Risk/Reward ratio minimum.
+                        
                         Format EXACTLY like this:
-                        * **ACTION:** [BUY / SELL / HOLD]
+                        * **CONFIDENCE SCORE (ACCURACY):** [Exact %]
+                        * **ACTION:** [BUY / SELL / AVOID]
                         * **ENTRY PRICE:** [Exact Price]
-                        * **TARGET:** [Exact Price]
-                        * **STOP-LOSS:** [Exact Price]
-                        * **NEWS IMPACT:** [Positive/Negative/Neutral]
-                        * **LOGIC:** [2 lines detailed logic]
+                        * **TARGET (1:2 R:R minimum):** [Exact Price]
+                        * **STOP-LOSS (Tight SMC levels):** [Exact Price]
+                        * **PRO-LOGIC:** [Explain VWAP, RSI & News confluence]
                         """
                         try:
                             analysis = model.generate_content(prompt)
                             st.success("Analysis Complete!")
                             st.info(analysis.text)
                             
-                            # Auto Trade Button
                             st.markdown("---")
-                            if st.button(f"⚡ Execute Trade for {search_symbol} Now"):
+                            if st.button(f"⚡ Execute Institutional Trade for {search_symbol}"):
                                 if kotak_consumer_key:
                                     fire_trade(search_symbol, "MARKET", price_data['current_price'])
                                 else:
@@ -201,4 +235,4 @@ with tab2:
                         except Exception as e:
                             st.error(f"AI Generation Failed: {e}")
             else:
-                st.error(f"Could not fetch data for {search_symbol}. Check if symbol is correct (e.g., TATASTEEL.NS).")
+                st.error("Could not fetch data. Check symbol.")
