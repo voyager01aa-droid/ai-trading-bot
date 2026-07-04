@@ -69,7 +69,7 @@ def get_market_news(api_key, query="Indian Stock Market NSE"):
 def analyze_with_ai(price_data, news, symbol):
     genai.configure(api_key=gemini_api_key)
     # 🚨 Model updated to gemini-1.5-pro as older versions are deprecated
-    model = genai.GenerativeModel('gemini-1.5-pro')
+    model = genai.GenerativeModel('gemini-1.5-flash')
     
     prompt = f"""
     You are an expert NSE Intraday Stock Market Analyst. Analyze the following deeply:
