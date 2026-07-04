@@ -30,6 +30,7 @@ def get_price_action(symbol):
         data = ticker.history(period="5d", interval="15m")
         
         if data.empty:
+            st.sidebar.error(f"Data empty for {symbol}. Stock delisted ya symbol galat hai.")
             return None
             
         latest = data.iloc[-1]
@@ -50,6 +51,7 @@ def get_price_action(symbol):
             "data_summary": data.tail(3).to_string()
         }
     except Exception as e:
+        st.sidebar.error(f"YFinance Error: {e}")
         return None
 
 # --- FUNCTION: FETCH NEWS ---
@@ -63,10 +65,11 @@ def get_market_news(api_key, query="Indian Stock Market NSE"):
     except:
         return "Failed to fetch news."
 
-# --- FUNCTION: AI ANALYSIS (GEMINI) ---
+# --- FUNCTION: AI ANALYSIS (GEMINI 1.5 PRO) ---
 def analyze_with_ai(price_data, news, symbol):
     genai.configure(api_key=gemini_api_key)
-    model = genai.GenerativeModel('gemini-pro')
+    # 🚨 Model updated to gemini-1.5-pro as older versions are deprecated
+    model = genai.GenerativeModel('gemini-1.5-pro')
     
     prompt = f"""
     You are an expert NSE Intraday Stock Market Analyst. Analyze the following deeply:
@@ -94,10 +97,7 @@ def analyze_with_ai(price_data, news, symbol):
 
 # --- FUNCTION: AUTO TRADE (KOTAK NEO REST API) ---
 def execute_kotak_trade(action, symbol, qty, price):
-    # Yahan hum future me direct `requests` use karke Kotak Neo ki REST API hit karenge
-    # Isse koi heavy C++ package install nahi karna padega.
     try:
-        # Placeholder logic for API hit
         st.success(f"✅ AUTO-TRADE COMMAND READY: {action} {qty} shares of {symbol} at current price ₹{price:.2f}")
     except Exception as e:
         st.error(f"Trade Failed: {e}")
@@ -111,7 +111,6 @@ if st.button("🚀 Analyze Market & Generate Call"):
             price_data = get_price_action(stock_symbol)
             
         with st.spinner("Fetching Global & India News..."):
-            # Clean symbol for better news matching (e.g., RELIANCE instead of RELIANCE.NS)
             search_query = stock_symbol.replace(".NS", "")
             news_data = get_market_news(news_api_key, f"{search_query} OR NSE India")
             
@@ -132,14 +131,11 @@ if st.button("🚀 Analyze Market & Generate Call"):
                     st.markdown("### 🎯 AI Trading Recommendation")
                     st.info(ai_call)
                     
-                    # --- AUTO TRADE TRIGGER ---
                     if "ACTION: BUY" in ai_call or "ACTION: SELL" in ai_call:
                         action = "BUY" if "ACTION: BUY" in ai_call else "SELL"
                         st.markdown("---")
                         st.subheader("⚡ Auto-Trade Execution")
                         
-                        # Note: In Streamlit, buttons inside conditionals can reset the page. 
-                        # We use st.checkbox or simple message for execution trigger.
                         execute_trade = st.checkbox(f"Approve {action} Order on Kotak Neo")
                         if execute_trade:
                             if kotak_consumer_key and kotak_password:
